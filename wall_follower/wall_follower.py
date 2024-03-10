@@ -6,7 +6,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from ackermann_msgs.msg import AckermannDriveStamped
 from visualization_msgs.msg import Marker
-
+from std_msgs.msg import Float32
 
 from wall_follower.visualization_tools import VisualizationTools
 
@@ -22,7 +22,7 @@ class WallFollower(Node):
         self.declare_parameter("velocity", "default")
         self.declare_parameter("desired_distance", "default")
         self.declare_parameter('wall_topic', '/wall')
-
+        self.declare_parameter('loss_topic','/loss')
         # Fetch constants from the ROS parameter server
         self.SCAN_TOPIC = self.get_parameter('scan_topic').get_parameter_value().string_value
         self.DRIVE_TOPIC = self.get_parameter('drive_topic').get_parameter_value().string_value
@@ -30,7 +30,7 @@ class WallFollower(Node):
         self.VELOCITY = self.get_parameter('velocity').get_parameter_value().double_value
         self.DESIRED_DISTANCE = self.get_parameter('desired_distance').get_parameter_value().double_value
         self.WALL_TOPIC = self.get_parameter('wall_topic').get_parameter_value().string_value 
-
+        self.LOSS_TOPIC = self.get_parameter('loss_topic').get_parameter_value().string_value
         # Based on the right or left side, the car will only 
         # account for scans in the cone between these angles
         # side_min_angle_magnitude : Radians, set >= 0
@@ -49,14 +49,17 @@ class WallFollower(Node):
         self.previous_distance_error = 0
         self.previous_slope_error = 0
         self.previous_time = 0
+
+        # Loss arrays
+        self.loss_array = []
     
         # Publishers
         self.wall_visual_publihser = self.create_publisher(Marker, self.WALL_TOPIC, 10)
         self.drive_input_publisher = self.create_publisher(AckermannDriveStamped, self.DRIVE_TOPIC,10)
-
-        # Subscribtion 
+        self.loss_publisher = self.create_publisher(Float32,self.LOSS_TOPIC,10)
+        # Subscription 
         self.create_subscription(LaserScan, self.SCAN_TOPIC, self.laser_callback, 10)
-
+        # self.total_loss = 0
     
     # Subscription Callback Function (Scan Processing, Feed Errors into Controller, & Send Drive Command)
     def laser_callback(self, laser_scan):
@@ -110,11 +113,18 @@ class WallFollower(Node):
             output_steering_angle = self.PID_controler(errors, current_time)
             velocity = self.VELOCITY * max(0.5, 0.1 + output_steering_angle**2)
             
+        ## calculating loss
+        loss = np.abs(self.DESIRED_DISTANCE - min(y))
+        loss_msg = Float32()
+        loss_msg.data = loss
+        self.loss_array.append(loss)
+        self.loss_publisher.publish(loss_msg)
+
         msg = AckermannDriveStamped()
         msg.drive.speed = velocity 
         msg.drive.steering_angle = float(output_steering_angle)
         self.drive_input_publisher.publish(msg)
-
+        # self.get_logger().info()
     def PID_controler(self, error, curr_time):
 
         # Assuming error is distance to wall
